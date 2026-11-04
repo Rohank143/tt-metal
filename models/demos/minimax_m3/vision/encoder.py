@@ -26,9 +26,9 @@ grid, which the tower test checks for the tower and test_vision_encoder_load_and
 need a device). The first image of each patch count builds them, which took 15-42 s with an empty kernel cache and
 0.1-1.4 s with the kernels already in the kernel cache on disk, both measured on an older version of this encoder;
 later images of that count reuse them. The resize gives 534 patch counts for images of up to 8192 pixels a side, so
-a warm-up in load() can only cover chosen counts, for example 576 tokens (672 x 672 pixels, and 1920 x 1080 photos,
-resized to 896 x 504) and 540 tokens (4032 x 3024 photos, resized to 756 x 560). An image of another count compiles
-on its first call and holds that encoder meanwhile.
+the media module's load() warms up chosen counts only (its WARMUP_SIZES): 576 tokens (672 x 672 pixels, and
+1920 x 1080 photos, resized to 896 x 504) and 540 tokens (4032 x 3024 photos, resized to 756 x 560). An image of
+another count compiles on its first call and holds that encoder meanwhile.
 
 Traces: forward is not ready for trace capture. Each call uploads its pixel values to a new device buffer and may
 stage the RoPE tables of a new grid (M3VLVisionModel keeps those of 16 grids and frees the least recently used), so

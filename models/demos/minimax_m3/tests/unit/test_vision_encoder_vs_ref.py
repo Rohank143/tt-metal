@@ -16,9 +16,9 @@ weights; the media test writes them to a small checkpoint):
   - test_vision_media_load_and_encode: the service's media module (vision/media.py) with the encoder, on a chip
     opened as the service opens it, with the media module's device_params (ttnn's defaults; the other tests here open
     theirs with an L1_SMALL region and a trace region): load() from a checkpoint directory that the test writes from
-    the 2-layer reference, on that chip; prepare() of an RGB image that resizes to 224x224; encode() into a stored
-    value. The value holds the image's n_tokens rows, bit for bit what the encoder's own forward gives for the
-    prepared pixels with the same weights.
+    the 2-layer reference, on that chip, with a 224x224 warm-up; prepare() of an RGB image that resizes to 224x224;
+    encode() into a stored value, which compiles no new program. The value holds the image's n_tokens rows, bit for
+    bit what the encoder's own forward gives for the prepared pixels with the same weights.
 The host tests of the encoder, which need no chip, are in test_vision_encoder_api.py.
 
 Image sizes (width x height in pixels), named by their grid of 14-pixel patches as the other vision tests name
@@ -163,9 +163,10 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
 def test_vision_media_load_and_encode(mesh_device, device_params, vision_reference, tmp_path):
     """The media module runs the encoder as the service calls it, on a chip opened with the media module's
     device_params as the service opens it: load() from a checkpoint directory (on that chip, which close() leaves
-    open), prepare() of an RGB image that resizes to 224x224 (h16w16), encode() into a stored value. The value holds
-    the image's n_tokens rows, bit for bit the encoder's own forward of the prepared pixels with the weights
-    load_vision_state_dict reads, at PCC >= 0.9998 against the reference."""
+    open) with a 224x224 warm-up, which compiles programs; prepare() of an RGB image that resizes to 224x224 (h16w16);
+    encode() into a stored value, which compiles none. The value holds the image's n_tokens rows, bit for bit the
+    encoder's own forward of the prepared pixels with the weights load_vision_state_dict reads, at PCC >= 0.9998
+    against the reference."""
     from transformers import MiniMaxM3VLConfig
 
     reference = vision_reference(NUM_LAYERS)
@@ -174,12 +175,15 @@ def test_vision_media_load_and_encode(mesh_device, device_params, vision_referen
     write_checkpoint(tmp_path, reference.weights, hf_config)
     media = MiniMaxM3Media(hf_config)
     assert media.device_params == MEDIA_DEVICE_PARAMS, "the test's chip is not opened as the service opens it"
-    media.load(mesh_device, str(tmp_path), "image", {})
+    media.load(mesh_device, str(tmp_path), "image", {"warmup": [[224, 224]]})
     try:
+        cache_entries = mesh_device.num_program_cache_entries()
+        assert cache_entries > 0, "load's warm-up compiled no program"
         item = media.prepare("image", _noise_pixels(230, 230))
         assert item.pixels.shape == (224, 224, 3), item.pixels.shape
         value = memoryview(bytearray(media.stored_nbytes(item)))
         media.encode([item], [value])
+        assert mesh_device.num_program_cache_entries() == cache_entries, "encode compiled a program the warm-up had not"
     finally:
         media.close()
 

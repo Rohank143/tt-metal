@@ -10,8 +10,8 @@ The MiniMax-M3 vision encoder on one Tenstorrent chip, in the form the encoder s
     finally:
         ttnn.deallocate(tokens)
 
-This module imports ttnn, so import it only where the chip is used, for example inside the media module's load(), and
-never in a process that must run without ttnn; the media module's prepare, which resizes images, does not import ttnn.
+This module imports ttnn, so import it only where the chip is used, as the media module's load() does, and never in a
+process that must run without ttnn; the media module's prepare, which resizes images, does not import ttnn.
 
 forward takes one resized image, uint8 (height, width, 3) with sides that are multiples of 28 pixels, as the media
 module's prepare returns it (M3Image.pixels). It turns the pixels into patch rows on the host (patch_rows, which

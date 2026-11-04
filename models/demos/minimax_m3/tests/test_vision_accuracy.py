@@ -3,8 +3,8 @@
 """
 Accuracy of the MiniMax-M3 vision encoder with the checkpoint's weights, against Hugging Face goldens.
 
-Builds TtMiniMaxM3VisionEncoder from the checkpoint as the encoder service's load() does (from_weights_path: all 32
-layers and the projector on one chip) and runs it on the images of golden_hf_vision.py as the encoder service does:
+Builds TtMiniMaxM3VisionEncoder from the checkpoint as the media module's load() does (from_weights_path: all 32
+layers and the projector on one chip) and runs it on the images of golden_hf_vision.py as the media module does:
 prepare resizes each image, then, as in encode(), forward(pixels) and read_embeddings into a host buffer. The tower
 output comes from the same encoder's model (M3VLVisionModel.forward_tower). Both are compared with Hugging Face's
 MiniMaxM3VLModel vision tower and projector in fp32 on the CPU, stored with the goldens, through the vision unit

@@ -3,16 +3,22 @@
 """
 Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py), the vision encoder as the encoder service calls it,
 against Hugging Face's vision tower and projector, on one chip with the 2-layer reference of conftest.py (seeded random
-weights, no checkpoint):
+weights; the media test writes them to a small checkpoint):
   - test_vision_encoder_vs_ref: forward(pixels) of a seeded noise image returns its vision tokens on the chip as bf16
     [n_tokens, 6144], row-major, in DRAM, at PCC >= 0.9998 and within the tower test's relL2 bound against the
     reference run on the same patch rows (patch_rows of the pixels, in the bf16 the chip gets).
-  - test_vision_encoder_load_and_encode: the encoder used the way the service's load() and encode() will use it: built
+  - test_vision_encoder_load_and_encode: the encoder used the way the service's load() and encode() use it: built
     from a state_dict and a transformers config, one warm-up image, then two images of other grids with the warm-up's
     patch count, each read with read_embeddings into its slot of one preallocated buffer laid out like a stored value
     ([n_tokens, 6144] bf16, with no header), with guard bytes around the slots. Each slot must hold the chip's output
     bit for bit and match the reference, nothing else in the buffer may change, and the images after the warm-up must
     add no program to the cache.
+  - test_vision_media_load_and_encode: the service's media module (vision/media.py) with the encoder, on a chip
+    opened as the service opens it, with the media module's device_params (ttnn's defaults; the other tests here open
+    theirs with an L1_SMALL region and a trace region): load() from a checkpoint directory that the test writes from
+    the 2-layer reference, on that chip; prepare() of an RGB image that resizes to 224x224; encode() into a stored
+    value. The value holds the image's n_tokens rows, bit for bit what the encoder's own forward gives for the
+    prepared pixels with the same weights.
 The host tests of the encoder, which need no chip, are in test_vision_encoder_api.py.
 
 Image sizes (width x height in pixels), named by their grid of 14-pixel patches as the other vision tests name
@@ -33,11 +39,14 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.minimax_m3.tt.vision.loader import load_vision_state_dict
 from models.demos.minimax_m3.tt.vision.preprocess import FACTOR, PATCH_SIZE, patch_rows
 from models.demos.minimax_m3.vision import format as media_format
 from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
+from models.demos.minimax_m3.vision.media import MiniMaxM3Media
 
 from ..test_factory import parametrize_mesh_with_fabric
+from .vision_checkpoint import write_checkpoint
 from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, assert_close, grid_name
 
 # Resized image sizes in pixels as (height, width), by their patch grid: the CI grids of the vision tests, then h4w6.
@@ -50,6 +59,8 @@ NUM_LAYERS = 2
 # Guard bytes around the slots of the shared buffer, which read_embeddings must leave as they are.
 GUARD_BYTES = 64
 GUARD = 0xA5
+# The media module's device_params, with which the service opens the chip: the media test opens its chip with them.
+MEDIA_DEVICE_PARAMS = {}
 
 
 def _parametrize_sizes():
@@ -105,7 +116,7 @@ def test_vision_encoder_vs_ref(mesh_device, device_params, size, vision_referenc
 @torch.no_grad()
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_reference):
-    """Built as load() will build it and called as encode() will call it, the encoder writes each image's tokens into
+    """Built as load() builds it and called as encode() calls it, the encoder writes each image's tokens into
     its slot of a shared buffer: bit for bit the chip's output, at PCC >= 0.9998 against the reference, with the guard
     bytes untouched; after one warm-up image of 224x224 (h16w16), images of 448x112 (h8w32) and 112x448 (h32w8),
     256 patches each, add no program to the cache."""
@@ -143,3 +154,42 @@ def test_vision_encoder_load_and_encode(mesh_device, device_params, vision_refer
     for start, size in zip(starts, sizes):
         outside[start : start + size] = False
     assert np.array_equal(buffer[outside], guard[outside]), "read_embeddings wrote outside the embeddings of its slot"
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [pytest.param((1, 1), MEDIA_DEVICE_PARAMS, id="1x1")], indirect=True
+)
+def test_vision_media_load_and_encode(mesh_device, device_params, vision_reference, tmp_path):
+    """The media module runs the encoder as the service calls it, on a chip opened with the media module's
+    device_params as the service opens it: load() from a checkpoint directory (on that chip, which close() leaves
+    open), prepare() of an RGB image that resizes to 224x224 (h16w16), encode() into a stored value. The value holds
+    the image's n_tokens rows, bit for bit the encoder's own forward of the prepared pixels with the weights
+    load_vision_state_dict reads, at PCC >= 0.9998 against the reference."""
+    from transformers import MiniMaxM3VLConfig
+
+    reference = vision_reference(NUM_LAYERS)
+    hf_config = MiniMaxM3VLConfig(vision_config={"num_hidden_layers": NUM_LAYERS}).to_dict()
+    assert vision_config(hf_config) == reference.config
+    write_checkpoint(tmp_path, reference.weights, hf_config)
+    media = MiniMaxM3Media(hf_config)
+    assert media.device_params == MEDIA_DEVICE_PARAMS, "the test's chip is not opened as the service opens it"
+    media.load(mesh_device, str(tmp_path), "image", {})
+    try:
+        item = media.prepare("image", _noise_pixels(230, 230))
+        assert item.pixels.shape == (224, 224, 3), item.pixels.shape
+        value = memoryview(bytearray(media.stored_nbytes(item)))
+        media.encode([item], [value])
+    finally:
+        media.close()
+
+    rows = media_format.embeddings(value, HIDDEN)
+    assert rows.shape == (item.n_tokens, HIDDEN), rows.shape
+    stored = torch.from_numpy(rows.copy()).view(torch.bfloat16)
+    encoder = TtMiniMaxM3VisionEncoder(mesh_device, load_vision_state_dict(str(tmp_path)), hf_config)
+    tokens = encoder.forward(item.pixels)
+    plain = _read_plain(tokens)
+    ttnn.deallocate(tokens)
+    assert torch.equal(stored.view(torch.int16), plain.view(torch.int16)), "not the encoder's own output"
+    name = f"media encode (230x230 RGB -> 224x224 pixels) layers={NUM_LAYERS}"
+    assert_close(name, _reference_tokens(reference, item.pixels), stored.float(), 0.9998, MAX_REL_L2["final"])

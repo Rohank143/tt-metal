@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Seeded random weights of the vision tower and projector (random_vision_weights), and a small checkpoint of such
 weights in the layout of the MiniMax-M3 checkpoint, written by the vision tests that read one from disk (the loader's
-and the encoder's host tests). No ttnn, so host tests can use it."""
+and the encoder's host tests, and the media module's device test). No ttnn, so host tests can use it."""
 
 from __future__ import annotations
 

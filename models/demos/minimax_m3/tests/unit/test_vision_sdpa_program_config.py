@@ -6,8 +6,8 @@ M3VLAttention's SDPA call, which runs with it. No device: the configs are built 
 attention's forward runs on stand-ins for its device tensors and ops.
 
 - On the 11x10, 12x10 and 13x10 core grids that Blackhole chips have depending on harvesting, the patch counts of
-  every grid of VISION_GRIDS, and 768 and 2268, get the q chunks pinned in Q_CHUNKS, with k chunks of 128 on the whole
-  grid, and a new config at each call.
+  every grid of VISION_GRIDS, and 768 and 2268, get the q chunks pinned in Q_CHUNKS, with k chunks of K_CHUNK
+  (256) on the whole grid, and a new config at each call.
 - The attention passes SDPA the config of its image's patch count and output_concat_heads=True, and gives SDPA's
   output, the heads side by side, to the output projection without nlp_concat_heads. Each RoPE call gets the cos and
   sin tables, the transformation matrix and the attention's RoPE compute config.
@@ -34,6 +34,8 @@ from .vision_helpers import grid_device
 
 CONFIG = MiniMaxM3VisionConfig()
 NUM_HEADS, PADDED_HEAD_DIM = CONFIG.num_attention_heads, nearest_32(CONFIG.head_dim)
+# The k chunk of every config, common.SDPA_K_CHUNK_SIZE, pinned here so that a change to it shows.
+K_CHUNK = 256
 # The q chunk per core grid and patch count: those of h4w4, h12w12, h16w16, h18w18, 336x448 (768), h32w32, h36w36,
 # h34w46, h40w54, 588x756 (2268) and h48w48. In the comments, the query rows of the slowest core for q chunks of 128,
 # 160, 192 and 256: ceil(16 heads x ceil(patches / q) / cores) chunks of q rows each. The fewest rows win, the larger q
@@ -82,12 +84,13 @@ Q_CHUNKS = {
 
 
 def test_vision_sdpa_program_config_q_chunks():
-    """The q chunks of Q_CHUNKS with k chunks of 128 on the whole grid; changing a config leaves the next call's."""
+    """The q chunks of Q_CHUNKS with k chunks of K_CHUNK on the whole grid; changing a config leaves the next call's."""
     for (x, y), q_chunks in Q_CHUNKS.items():
         for patches, q_chunk in q_chunks.items():
             config = sdpa_program_config(grid_device(x, y), patches, NUM_HEADS)
             grid = config.compute_with_storage_grid_size
-            assert (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y) == (q_chunk, 128, x, y), (x, y, patches)
+            got = (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y)
+            assert got == (q_chunk, K_CHUNK, x, y), (x, y, patches)
             config.q_chunk_size = 32
             assert sdpa_program_config(grid_device(x, y), patches, NUM_HEADS).q_chunk_size == q_chunk, (x, y, patches)
 
@@ -152,7 +155,8 @@ def test_vision_attention_sdpa_call(monkeypatch, patches):
     _, _, kwargs, attn = events[5]
     config = kwargs.pop("program_config")
     grid = config.compute_with_storage_grid_size
-    assert (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y) == (Q_CHUNKS[12, 10][patches], 128, 12, 10)
+    got = (config.q_chunk_size, config.k_chunk_size, grid.x, grid.y)
+    assert got == (Q_CHUNKS[12, 10][patches], K_CHUNK, 12, 10), got
     assert kwargs == dict(
         is_causal=False,
         scale=attention.scale,

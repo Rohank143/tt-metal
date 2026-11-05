@@ -39,7 +39,7 @@ VISION_GRIDS = {
     # masks 112 of its 256 keys
     "h12w12": (1, 12, 12),
     # 56x56, the smallest the processor makes: 16 patches and 4 tokens, every linear on ttnn's own config, and SDPA
-    # with one 128-key chunk, 112 of its keys masked
+    # with one 256-key chunk, 240 of its keys masked
     "h4w4": (1, 4, 4),
 }
 # The CI entry "MiniMax-M3 vision unit tests (1-card)", which has a 5 minute timeout, runs h16w16 and h40w54. h40w54
@@ -49,8 +49,8 @@ VISION_GRIDS = {
 # ttnn's own config at every grid here. M3_VISION_ALL_GRIDS=1 adds the other grids. They are left out rather than
 # skipped, so the leg shows no skipped vision tests.
 CI_GRIDS = ("h16w16", "h40w54")
-# The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 128-key chunk and masks the padded
-# ones: 16 of 2176 at 2160 patches, too few for a broken mask to move the output past its bound, and 60 of 384 at 324.
+# The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 256-key chunk and masks the padded
+# ones: 144 of 2304 at 2160 patches, and 188 of 512 at 324, the largest share of any grid the attention runs in CI.
 ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
 # The tower test of activations in L1 against DRAM runs h16w16 and h36w36 in CI: both keep the activations in L1 on
 # 11x10, 12x10 and 13x10, and h36w36 also the MLP's hidden activations in block shards. h36w36 adds a partial tile row,
@@ -98,9 +98,9 @@ def grid_name(grid_thw) -> str:
     return f"h{h}w{w}" if t == 1 else f"t{t}h{h}w{w}"
 
 
-# A check's bound at a grid where its relative L2 error passes MAX_REL_L2. At h4w4 SDPA attends over 16 keys (112 of
-# its one 128-key chunk masked), so each output row averages few bf16 products: on a P150 the attention's relL2 was
-# 0.0135 there (PCC 0.999915), against 0.0048 to 0.0070 from 144 to 2304 patches.
+# A check's bound at a grid where its relative L2 error passes MAX_REL_L2. At h4w4 SDPA attends over 16 keys (240 of
+# its one 256-key chunk masked), so each output row averages few bf16 products: on a P150, with 128-key chunks, the
+# attention's relL2 was 0.0135 there (PCC 0.999915), against 0.0048 to 0.0070 from 144 to 2304 patches.
 MAX_REL_L2_AT_GRID = {("attention", "h4w4"): 0.027}
 
 

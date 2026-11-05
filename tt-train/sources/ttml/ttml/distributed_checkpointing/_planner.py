@@ -107,6 +107,8 @@ class SavePlan:
         """The index entries this plan produces; ``crc32[(key, file)]`` adds checksums when known."""
         entries: dict[str, Entry] = {}
         for key, info in self.infos.items():
+            if not self.items.get(key):
+                continue  # another rank writes every chunk of this key
             chunks = [
                 ChunkRecord(
                     box=item.chunk.box,
@@ -139,19 +141,31 @@ def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
     file_metadata: Callable[[tuple[int, ...]], dict] | None = None,
+    owner_of: Callable[[str, list[Chunk]], Chunk | None] | None = None,
 ) -> SavePlan:
-    """One file per mesh coordinate any tensor lives on; each key's unique boxes assigned to their elected owners."""
+    """One file per mesh coordinate that writes something; each key's unique boxes assigned to their elected owners.
+
+    ``owner_of(key, replica group)`` overrides the election: it returns the group's chunk this process writes, or
+    ``None`` when another rank of a multi-rank world writes it. The default elects among the group's coordinates.
+    """
     infos = {info.key: info for info in infos}
-    coords = sorted({c for info in infos.values() for c in info.label.mesh_coords})
+    owned: dict[str, list[Chunk]] = {}
+    for key, info in infos.items():
+        info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
+        chosen: list[Chunk] = []
+        for group in replica_groups(chunk_boxes(info.label, info.local_shape)).values():
+            own = elect_owner(key, group) if owner_of is None else owner_of(key, group)
+            if own is not None:
+                chosen.append(own)
+        owned[key] = chosen
+    coords = sorted({own.mesh_coord for chunks in owned.values() for own in chunks})
     files = [FilePlan(i, c, file_for_coord(c)) for i, c in enumerate(coords)]
     file_of = {c: i for i, c in enumerate(coords)}
     items: dict[str, list[WriteItem]] = {}
-    for key, info in infos.items():
-        info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
+    for key, chunks in owned.items():
         per_key: list[WriteItem] = []
-        for group in replica_groups(chunk_boxes(info.label, info.local_shape)).values():
-            own = elect_owner(key, group)
-            item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=info.local_nbytes)
+        for own in chunks:
+            item = WriteItem(key=key, chunk=own, file=file_of[own.mesh_coord], nbytes=infos[key].local_nbytes)
             per_key.append(item)
             files[item.file].items.append(item)
         items[key] = per_key
@@ -231,8 +245,12 @@ def _padding_fill(transform: Transform) -> str:
     return "zeros"
 
 
-def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
-    """The reads and fills that build every destination shard of one key from the saved chunks."""
+def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] | None = None) -> KeyPlan:
+    """The reads and fills that build every destination shard of one key from the saved chunks.
+
+    With ``local_coords`` (a multi-rank world), only the replica groups with a coordinate this rank holds are
+    planned; the other ranks plan theirs.
+    """
     if entry.dtype != info.dtype:
         raise DtypeMismatch(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
     dest_global = info.global_shape
@@ -245,6 +263,8 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
         )
     same_layout = entry.transform == info.transform and tuple(entry.global_shape) == tuple(dest_global)
     groups = replica_groups(chunk_boxes(info.label, info.local_shape))
+    if local_coords is not None:
+        groups = {g: cs for g, cs in groups.items() if any(c.mesh_coord in local_coords for c in cs)}
     boxes = {group: chunks[0].box for group, chunks in groups.items()}
     reads: list[ReadItem] = []
     fills: list[FillItem] = []
@@ -286,7 +306,11 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
 
 
 def create_load_plan(
-    index: Index, infos: Iterable[TensorInfo], strict: bool = True, roles: Iterable[str] | None = None
+    index: Index,
+    infos: Iterable[TensorInfo],
+    strict: bool = True,
+    roles: Iterable[str] | None = None,
+    local_coords: set[tuple[int, ...]] | None = None,
 ) -> LoadPlan:
     """A ``KeyPlan`` per live tensor. Live names resolve through the entries' recorded live keys.
 
@@ -310,12 +334,18 @@ def create_load_plan(
             missing.append(info.key)
             continue
         used.add(entry_key)
-        plans[info.key] = plan_key(index.entries[entry_key], info)
-    unexpected = [
-        key for key, entry in index.entries.items() if key not in used and (wanted is None or entry.role in wanted)
-    ]
+        plans[info.key] = plan_key(index.entries[entry_key], info, local_coords)
+    unexpected = unexpected_keys(index, used, wanted)
     if strict and missing:
         raise MissingKeyError(f"{len(missing)} live tensor(s) have no entry in the checkpoint: {missing[:5]}")
     if strict and unexpected:
         raise UnexpectedKeyError(f"{len(unexpected)} checkpoint entr(ies) have no live tensor: {unexpected[:5]}")
     return LoadPlan(plans, missing, unexpected)
+
+
+def unexpected_keys(index: Index, used: set[str], wanted: set[str] | None) -> list[str]:
+    """The entries of the wanted roles no live tensor claimed. A multi-rank load judges this over the union of
+    the ranks' claims."""
+    return [
+        key for key, entry in index.entries.items() if key not in used and (wanted is None or entry.role in wanted)
+    ]

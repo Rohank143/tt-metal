@@ -22,9 +22,11 @@ these shapes need an entry rather than falling back.
 from __future__ import annotations
 
 import math
+import os
 from typing import NamedTuple
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ....utils.matmul import agmm_worker_grid
 from .length_classes import LENGTH_CLASSES, length_class
@@ -163,3 +165,35 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     if not divisors:
         return None
     return AGMM_BLOCK_SIZES[(k, n, max(divisors))]
+
+
+# Explicit blockings for the layers that run with fp32 dest accumulation off: "M,K,N,subblock_h,subblock_w".
+# A 16-bit Dst holds 8 tiles a half instead of 4, so the subblock covers 8 output tiles (2x4 / 4x2) and the
+# K loop does 6 unpacks per 8 tile-MACs instead of 4 per 4. Measured on the Wormhole 4x8 galaxy at 15 s.
+_FP32_DEST_OFF_BLOCKING = {"ff1": "8,7,16,2,4", "qkv": "12,7,8,4,2"}
+
+
+def fp32_dest_off_agmm(layer: str, arch) -> tuple[ttnn.WormholeComputeKernelConfig | None, tuple | None]:
+    """`(compute_kernel_config, blocking)` for the AGMM `layer` ("ff1" or "qkv") with fp32 dest accumulation
+    off, or `(None, None)` when the layer keeps fp32 dest. Partial sums between K blocks stay fp32 in L1
+    (packer L1 accumulation); only the Dst accumulation inside a K block is bf16.
+
+    MINIMAX_H3_MM_FP32_DEST: "1" keeps fp32 dest everywhere (the Blackhole default), "0" turns it off for
+    ff1 and to_qkv (the Wormhole default), "ff1" / "qkv" for that layer only. MINIMAX_H3_FF1_BLOCKS /
+    MINIMAX_H3_QKV_BLOCKS override the blocking. The blocking is a 4-tuple `(M, K, N, (subblock_h,
+    subblock_w))`, which `get_matmul_config` uses as given instead of the swept (2x2-subblock) tables.
+    """
+    setting = os.environ.get("MINIMAX_H3_MM_FP32_DEST", "1" if is_blackhole() else "0")
+    if setting != "0" and layer not in setting:
+        return None, None
+    config = ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    m, k, n, sh, sw = (
+        int(v) for v in os.environ.get(f"MINIMAX_H3_{layer.upper()}_BLOCKS", _FP32_DEST_OFF_BLOCKING[layer]).split(",")
+    )
+    return config, (m, k, n, (sh, sw))

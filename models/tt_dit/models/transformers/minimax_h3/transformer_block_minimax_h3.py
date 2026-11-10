@@ -20,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_kwargs, agmm_pins
+from .agmm_config import agmm_kwargs, agmm_pins, fp32_dest_off_agmm
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
@@ -172,6 +172,9 @@ class MiniMaxH3TransformerBlock(Module):
         self._eye_tables: dict[int, ttnn.Tensor] = {}
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        # ff1 with fp32 dest off (the Wormhole default) and its explicit 2x4-subblock blocking; ff2 and the adaLN
+        # projection keep fp32 dest. The blocking replaces the swept table on the legacy path only.
+        self._ff1_compute_kernel_config, self._ff1_blocking = fp32_dest_off_agmm("ff1", mesh_device.arch())
         # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
         self._ff1_pins = self._mmrs_pin = None
         if dynamic_length:
@@ -439,6 +442,7 @@ class MiniMaxH3TransformerBlock(Module):
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
                 mmrs_config=self._mmrs_pin,
+                ff1_compute_kernel_config=self._ff1_compute_kernel_config,
                 **self._ff1_kwargs(normed),
             )
         ff_out = self.ff(
@@ -447,6 +451,7 @@ class MiniMaxH3TransformerBlock(Module):
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            ff1_compute_kernel_config=self._ff1_compute_kernel_config,
             **self._ff1_kwargs(normed),
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
@@ -456,4 +461,6 @@ class MiniMaxH3TransformerBlock(Module):
         none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
         if not self.use_fused_agmm:
             return {}
+        if self._ff1_pins is None and self._ff1_blocking is not None:
+            return {"default_block_size": self._ff1_blocking}
         return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])

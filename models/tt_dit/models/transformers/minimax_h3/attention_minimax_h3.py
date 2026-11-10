@@ -19,7 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_kwargs, agmm_pins
+from .agmm_config import agmm_kwargs, agmm_pins, fp32_dest_off_agmm
 from .length_classes import LENGTH_CLASSES, length_class
 
 # Ring SDPA chunk pair of the dynamic-length path per length class, one program each. Measured per block
@@ -249,6 +249,10 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # to_qkv with fp32 dest off (the Wormhole default) and its explicit 4x2-subblock blocking; to_out keeps
+        # fp32 dest. The blocking replaces the swept table on the legacy path only: a dynamic-length pin wins.
+        qkv_config, self._qkv_blocking = fp32_dest_off_agmm("qkv", mesh_device.arch())
+        self.qkv_compute_kernel_config = qkv_config or self.mm_compute_kernel_config
 
     # ------------------------------------------------------------------ weights
 
@@ -539,11 +543,13 @@ class MiniMaxH3Attention(Module):
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
+            compute_kernel_config=self.qkv_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
+            **self._agmm_kwargs(
+                self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND, self._qkv_blocking
+            ),
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -669,11 +675,14 @@ class MiniMaxH3Attention(Module):
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
 
-    def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor) -> dict:
-        """The fused all-gather matmul's blocking kwargs at `x`'s per-device rows (class pin or swept table);
-        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+    def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor, blocking: tuple | None = None) -> dict:
+        """The fused all-gather matmul's blocking kwargs at `x`'s per-device rows (class pin, else `blocking`
+        when given, else the swept table); none on the unfused path, whose matmul overruns L1 with the swept
+        blockings at long sequence lengths."""
         if not self.use_fused_agmm:
             return {}
+        if pins is None and blocking is not None:
+            return {"default_block_size": blocking}
         return agmm_kwargs(pins, k, n, x.padded_shape[-2])
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:

@@ -464,10 +464,13 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 # Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
 # per-chip -- but two things differ and both are memory, not parallelism:
 #
-#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, and the DiT
-#     alone fills it. Keeping the text encoder resident beside it (~1.6 GB/device) overflows by a
-#     couple of MB, so each stage is evicted before the next loads. The cost is a text-encoder
-#     reload per request, which is the trade the Residency note above describes.
+#   * `coresident: True` with `evict_vae_for_denoise`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB.
+#     With `dit_fsdp` the DiT is ~2 GB a device, so it, the text encoder (~2 GB) and the audio decoder (0.56 GB) stay
+#     resident across requests; the video VAE decoder (4.9 GB of fp32 weights) does not fit beside a denoise (the
+#     first step OOMs), so it is dropped before each denoise and reloaded for the decode (~2.9 s a request). Measured
+#     device 0 at the 15 s rung: 7.3 GB after the first denoise step, 10.4 GB after the decode with all four
+#     resident. Before (`coresident: False`, every stage evicted) a request also reloaded the text encoder (3.0 s),
+#     the DiT (3.8 s) and the audio decoder (0.4 s).
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #   * ref2va arena caps for a 12 GB chip. The transformer rebuilds a cap-sized source table every
 #     forward (sum of caps x hidden/TP x bf16): the Blackhole caps make that 322336 rows = 866 MB per
@@ -477,16 +480,14 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 #     Table: 243456 rows = 654 MB; resident prefix 130528 rows instead of 209408.
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
-# TODO: Try to figure out how we can keep components of the the model coresident throughout generation
-# to improve perf. Easy target would be to keep the text encoder resident if possible, might save a
-# few seconds. This will matter when video gen is ~1 minute or so.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (4, 8): {
         "tp_axis": 0,
         "sp_axis": 1,
         "num_links": 4,
         "topology": ttnn.Topology.Ring,
-        "coresident": False,
+        "coresident": True,
+        "evict_vae_for_denoise": True,
         "dit_fsdp": True,
         # Bucketed: dynamic length is unmeasured on Wormhole.
         "bucket_denoise": True,
@@ -694,6 +695,9 @@ class MiniMaxH3Pipeline:
         source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
         fsdp = "on" if self.dit_fsdp else "off"
         self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
+        # Coresident presets whose video VAE decoder does not fit beside a denoise: it is dropped before each denoise
+        # and reloads for the decode (everything else stays resident across requests).
+        self.evict_vae_for_denoise = coresident and preset.get("evict_vae_for_denoise", False)
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -2348,6 +2352,10 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         if self.dynamic_length:
             self._bind_kv_gather_pair(transformer)
+        if self.evict_vae_for_denoise:
+            for module in self._vae.modules:
+                if module.is_loaded():
+                    module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(

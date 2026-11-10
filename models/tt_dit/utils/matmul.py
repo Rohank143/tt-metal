@@ -1046,6 +1046,14 @@ else:
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+        # MiniMax-H3 ff2 at 15 s / 768P on the Wormhole 4x8 galaxy (TP ring of 4, 4 links), on the 13824-row
+        # bucket (MINIMAX_H3_BUCKET_LADDER_4X8's 110592). The 8x7 matmul grid leaves 16 cores for the
+        # reduce-scatter; M is never transposed here, so a core walks 62 M tiles (61.7, the last block
+        # partial) by 21 N tiles. Swept in test_minimax_h3_transformer_block_perf (FSDP, transient CCL, 7 timed
+        # calls): (M, K, N) blocks (6, 7, 8) beat (6, 4, 8), (4, 7, 8) and (2, 7, 8), and take 1.5 ms off the
+        # unfused minimal_matmul + reduce_scatter_minimal_async + addcmul block; (8, 7, 8) and (6, 14, 8) do not
+        # fit L1. Fused vs unfused block output on identical inputs: PCC 0.99997 on every device.
+        (13824, 3584, 5376): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 6, 7, 8, 2, 2, None, 1),
     },
     ttnn.CoreCoord(12, 10): {
         # Wan2.2 720p ff2, single galaxy, swept 2026-08-24 (windowed): Mt_per_core=37, M_block=8

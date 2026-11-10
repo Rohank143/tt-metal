@@ -21,11 +21,18 @@
 #   owner_id: U08RRAU5E15 # Ridvan Song
 #
 # The teardown sanity gate rows (tests/tt_metal/distributed/multiprocess/teardown_sanity, the rows that pass
-# today) fit the 10-minute merge-gate budget once the fabric CPU tests are re-enabled here:
+# today) fit the 10-minute merge-gate budget once the fabric CPU tests are re-enabled here. Note on selection:
+# the merge gate must stay green, so it can run only the gate rows, not the @known rows (those fail on purpose).
+# ``--grep`` is a substring match on the command string, not a pytest ``-k`` expression, and the @known rows are
+# plain failures, not xfail markers — so neither ``--grep "not xfail"`` nor ``-k "not xfail"`` selects the gates.
+# Enabling this entry therefore needs a gate selector first (follow-up): mark the gate rows (e.g. a
+# ``@pytest.mark.gate``) and pass ``-m gate`` through the group's pytest line, or split the gate rows into their
+# own node ids. Until then the full set runs on the (non-merge-gate) fabric CPU lane as teardown-sanity-mpi /
+# teardown-sanity-ttmetal.
 #
 # - id: scaleout-cpu-teardown-sanity-smoke
 #   name: scaleout cpu teardown sanity (gates only)
-#   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity --grep "not xfail"
+#   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-mpi -m gate  # needs the gate marker (above)
 #   skus:
 #     cpu_medium:
 #       timeout: 10

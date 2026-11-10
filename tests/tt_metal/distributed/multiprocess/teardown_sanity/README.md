@@ -87,8 +87,16 @@ Gates only, not tests of things MPI cannot do: `test_mpi_delivers_proc_failed_ul
 and `test_mpi_abort_reports_failure` (MPI_Abort reports a non-zero code) — the two MPI capabilities the
 DistributedContext recovery relies on (the counterpart, for the context, of Part 1's install group E).
 
-The stacked PR adds one more group here: **Group H — multi-host DistributedContext (SC4)**, the context-level
-counterpart of Group D.
+### Group H — multi-host DistributedContext (SC4), lane L4 across hosts
+Group D (Part 1) proves the launcher reaps a fault on a remote host; this proves the **context's own** teardown
+does the same when the fault lands *inside* a collective on a remote host. `run_teardown_multihost_context_tests.sh`,
+a second SC4 matrix entry, runs the DistributedContext probe (`sanity_probe.py`) across two hosts through tt-run,
+one rank per host on the mock dual galaxy, and asserts the teardown shape for: a clean job; a peer that dies
+inside a collective on the remote host, where the `MPI_ERRORS_RETURN` errhandler turns the survivor's barrier
+into a returned error and the context calls `MPI_Abort` (P20); and a peer that hangs inside a collective, where
+the per-collective `TT_METAL_OPERATION_TIMEOUT_SECONDS` gives up and tears the job down well before the launcher
+wall clock (P22). Each asserts the right exit code and nothing left on **either** host. It depends on the cpp fix
+(errhandler + timeout), so it lives in the stacked PR with that fix, not with the launcher-only Group D.
 
 ---
 
@@ -99,7 +107,6 @@ Locally (a built tree and the python environment):
 pytest tests/tt_metal/distributed/multiprocess/teardown_sanity -v -p no:benchmark
 ```
 
-In CI the single-host groups run as `teardown-sanity-mpi` (Part 1) and `teardown-sanity-ttmetal` (Part 2); each is
 its own matrix entry, so they are reported as teardown, not folded into the fabric suite. The multi-host launcher
 group (Part 1, D) runs on the SC4 lane, added in the base PR; the stacked PR adds the DistributedContext multi-host
 group (Part 2, H) on the same lane. Deadlines: `TT_SANITY_DEADLINE` (a row that must end) and

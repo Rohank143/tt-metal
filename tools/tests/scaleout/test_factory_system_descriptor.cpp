@@ -13,6 +13,7 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <factory_system_descriptor/query.hpp>
 #include <factory_system_descriptor/utils.hpp>
+#include <node/node.hpp>
 #include <node/node_types.hpp>
 
 // Include generated protobuf headers
@@ -178,7 +179,22 @@ TEST(Cluster, TestFactorySystemDescriptorSingleNodeTypes) {
 
         // Generate the FSD
         cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+        tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
+        std::ifstream fsd_stream(fsd_file);
+        std::string fsd_text((std::istreambuf_iterator<char>(fsd_stream)), std::istreambuf_iterator<char>());
+        ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(fsd_text, &fsd));
+        ASSERT_EQ(fsd.hosts_size(), 1);
+        EXPECT_EQ(fsd.hosts(0).node_type(), node_type_string);
     }
+}
+
+TEST(Cluster, TestNodeTypeBoardRevision) {
+    EXPECT_EQ(get_node_type_board_revision(NodeType::WH_GALAXY_XY_TORUS), BoardRevision::WH_GALAXY);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::BH_GALAXY_REV_AB), BoardRevision::BH_GALAXY_REV_AB);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::BH_GALAXY_REV_C_XY_TORUS), BoardRevision::BH_GALAXY_REV_C);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::BH_GALAXY), BoardRevision::NONE);
+    EXPECT_EQ(get_node_type_board_revision(NodeType::P150_LB), BoardRevision::NONE);
 }
 
 TEST(Cluster, TestFactorySystemDescriptor16LB) {

@@ -621,4 +621,38 @@ bool is_torus(NodeType node_type) {
     return topology == Topology::X_TORUS || topology == Topology::Y_TORUS || topology == Topology::XY_TORUS;
 }
 
+BoardRevision get_node_type_board_revision(NodeType node_type) {
+    // No default case, so -Wswitch makes every new node type declare its revision here.
+    switch (node_type) {
+        case NodeType::WH_GALAXY:
+        case NodeType::WH_GALAXY_X_TORUS:
+        case NodeType::WH_GALAXY_Y_TORUS:
+        case NodeType::WH_GALAXY_XY_TORUS: return BoardRevision::WH_GALAXY;
+
+        case NodeType::BH_GALAXY_REV_AB:
+        case NodeType::BH_GALAXY_REV_AB_X_TORUS:
+        case NodeType::BH_GALAXY_REV_AB_Y_TORUS:
+        case NodeType::BH_GALAXY_REV_AB_XY_TORUS: return BoardRevision::BH_GALAXY_REV_AB;
+
+        case NodeType::BH_GALAXY_REV_C:
+        case NodeType::BH_GALAXY_REV_C_X_TORUS:
+        case NodeType::BH_GALAXY_REV_C_Y_TORUS:
+        case NodeType::BH_GALAXY_REV_C_XY_TORUS: return BoardRevision::BH_GALAXY_REV_C;
+
+        case NodeType::N300_LB:
+        case NodeType::N300_LB_DEFAULT:
+        case NodeType::N300_QB:
+        case NodeType::N300_QB_DEFAULT:
+        case NodeType::P150_LB:
+        case NodeType::P150_QB_AE:
+        case NodeType::P150_QB_AE_DEFAULT:
+        case NodeType::P300_QB_GE:
+        case NodeType::BH_GALAXY:
+        case NodeType::BH_GALAXY_X_TORUS:
+        case NodeType::BH_GALAXY_Y_TORUS:
+        case NodeType::BH_GALAXY_XY_TORUS: return BoardRevision::NONE;
+    }
+    throw std::runtime_error("Unknown node type: " + std::to_string(static_cast<int>(node_type)));
+}
+
 }  // namespace tt::scaleout_tools

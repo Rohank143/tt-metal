@@ -41,6 +41,11 @@ Topology get_node_type_topology(NodeType node_type);
 
 bool is_torus(NodeType node_type);
 
+enum class BoardRevision { NONE, WH_GALAXY, BH_GALAXY_REV_AB, BH_GALAXY_REV_C };
+
+// BH_GALAXY, BH_GALAXY_X_TORUS, ... return NONE: their revision is only known by probing hardware.
+BoardRevision get_node_type_board_revision(NodeType node_type);
+
 // Create a node instance (returns base class pointer for polymorphism)
 std::unique_ptr<NodeBase> create_node_instance(NodeType node_type);
 

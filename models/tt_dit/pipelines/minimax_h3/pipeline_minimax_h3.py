@@ -488,6 +488,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": True,
         "evict_vae_for_denoise": True,
+        "park_vae_decoder": True,
         "dit_fsdp": True,
         # Bucketed: dynamic length is unmeasured on Wormhole.
         "bucket_denoise": True,
@@ -698,6 +699,12 @@ class MiniMaxH3Pipeline:
         # Coresident presets whose video VAE decoder does not fit beside a denoise: it is dropped before each denoise
         # and reloads for the decode (everything else stays resident across requests).
         self.evict_vae_for_denoise = coresident and preset.get("evict_vae_for_denoise", False)
+        # ... and keeps 1/SP of its decoder's weights through the denoise, gathered back over the fabric for the decode
+        # instead of reloaded from the host.
+        self.park_vae_decoder = (
+            self.evict_vae_for_denoise
+            and os.environ.get("MINIMAX_H3_PARK_VAE", "1" if preset.get("park_vae_decoder", False) else "0") == "1"
+        )
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -1772,6 +1779,11 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
+        if self.park_vae_decoder and module is self._vae.decoder:
+            # Park and unpark once at each host load, so the slice and gather programs compile with the load (the
+            # warmup) rather than at the first request's decode.
+            module.park_weights(self.ccl_manager, self.sp_axis)
+            module.unpark_weights()
 
     @property
     def vae(self) -> MiniMaxH3Vae:
@@ -2354,7 +2366,11 @@ class MiniMaxH3Pipeline:
             self._bind_kv_gather_pair(transformer)
         if self.evict_vae_for_denoise:
             for module in self._vae.modules:
-                if module.is_loaded():
+                if not module.is_loaded():
+                    continue
+                if self.park_vae_decoder and module is self._vae.decoder:
+                    module.park_weights(self.ccl_manager, self.sp_axis)
+                else:
                     module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):

@@ -175,7 +175,7 @@ tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
+tt_metal/hw/inc/**/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/inc/api/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
@@ -388,7 +388,6 @@ ttnn/cpp/ttnn/operations/data_movement/**/CMakeLists.txt @tenstorrent/metalium-d
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT
-ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard* @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
@@ -611,7 +610,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # ttnn-core keeps the TTNN framework and steps back from tests and bindings of code other teams build.
-# Code other teams build under ttnn/ stays with ttnn-core until its developers take it over.
+# Code other teams build under ttnn/ is owned by those teams (listed at the end of this section).
 # TTNN framework tests stay with ttnn-core and the other tests/ttnn/ owners.
 tests/ttnn/unit_tests/base_functionality/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/tensor/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
@@ -713,6 +712,27 @@ ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
+# Code other teams build under ttnn/: owned by the teams that build it.
+ttnn/core/tensor/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/tensor/flatbuffer/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/tensor/kernels/ @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/tensor/stream_service_common.hpp @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/api/ttnn/tensor/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/services/ @bzhangTT @yeongyunTT
+ttnn/api/ttnn/services/ @bzhangTT @yeongyunTT
+ttnn/ttnn/_experimental/layer_completion.py @bzhangTT @yeongyunTT
+ttnn/core/global_circular_buffer.cpp @jbaumanTT @abhullar-tt
+ttnn/api/ttnn/global_circular_buffer.hpp @jbaumanTT @abhullar-tt
+ttnn/core/prefetcher_pipe.cpp @jbaumanTT @abhullar-tt
+ttnn/api/ttnn/prefetcher_pipe.hpp @jbaumanTT @abhullar-tt
+ttnn/ttnn/_experimental/tensor_prefetcher_matmul.py @jbaumanTT @abhullar-tt
+ttnn/ttnn/_experimental/reload.py @jbaumanTT @abhullar-tt
+ttnn/core/distributed/*socket* @tenstorrent/metalium-developers-metal-distributed
+ttnn/api/ttnn/distributed/*socket* @tenstorrent/metalium-developers-metal-distributed
+tests/ttnn/distributed/test_socket_perf.py @tenstorrent/metalium-developers-metal-distributed
+ttnn/cpp/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
+ttnn/ttnn/profiler.py @mo-tenstorrent @akerteszTT @yusufbashiTT
+ttnn/ttnn/experimental_loader/golden_functions.py @tenstorrent/metalium-developers-ops-leads
 # Outside ttnn-core's scope and rarely changed: no owner, so anyone with write access can approve.
 tests/ttnn/distributed/test_matmul_send_recv_pipeline.py
 tests/ttnn/distributed/test_distributed_layernorm_TG.py

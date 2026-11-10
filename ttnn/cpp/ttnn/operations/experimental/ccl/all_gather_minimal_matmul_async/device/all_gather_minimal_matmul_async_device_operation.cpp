@@ -11,6 +11,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
@@ -167,6 +168,17 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         attributes.config.has_value() ? attributes.config->M_block_size : std::get<0>(*default_blocks);
     const bool single_m_block =
         agmm_single_m_block(M / tt::constants::TILE_HEIGHT, M_block_tiles, transposed ? grid.x : grid.y);
+    // Gather-sender mode also turns on the barrier semaphore's cores, which `attributes` does not hash.
+    const bool gather_senders = agmm_uses_gather_senders(
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        attributes.topology,
+        attributes.ring_size,
+        tensor_args.persistent_weight_buffer.has_value(),
+        transposed,
+        grid,
+        act_tensor.device()->compute_with_storage_grid_size(),
+        attributes.num_links,
+        attributes.barrier_semaphore);
     return ttsl::hash::hash_objects_with_default_seed(
         attributes,
         transposed,
@@ -180,7 +192,8 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         rows_free(tensor_args.fused_ternary_input_b),
         attributes.fused_ternary_scalar.has_value(),
         tensor_args.persistent_weight_buffer,
-        single_m_block);
+        single_m_block,
+        gather_senders);
 }
 
 void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
